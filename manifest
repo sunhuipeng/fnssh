@@ -1,0 +1,16 @@
+appname=fnssh
+version=1.2.5
+display_name=SSH
+desc=极致简洁的 SSH 终端。安装时配置目标主机、账号密码与连接后自动执行的命令，打开应用即自动连接，进入全屏终端。
+maintainer=fnssh
+maintainer_url=https://github.com/cmliu/webssh
+distributor=fnssh
+distributor_url=https://github.com/cmliu/webssh
+source=thirdparty
+platform=all
+service_port=8899
+checkport=true
+ctl_stop=true
+desktop_uidir=ui
+desktop_applaunchname=fnssh.main
+changelog=1.2.5 标签栏智能显隐：多个会话时显示标签与关闭按钮，仅剩一个会话时隐藏标签（保留 + 可再开），更美观且防止全部关闭。

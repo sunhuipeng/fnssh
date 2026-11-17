@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "fnssh.main": {
+      "title": "SSH",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "url": "/app/fnssh/",
+      "gatewaySocket": "fnssh.sock",
+      "gatewayPrefix": "/app/fnssh",
+      "allUsers": true
+    }
+  }
+}

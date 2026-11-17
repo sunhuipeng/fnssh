@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SSH</title>
+  <link rel="stylesheet" href="static/xterm.css" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    .term {
+      position: absolute;
+      inset: 0;
+      display: none;
+    }
+    .term.active {
+      display: block;
+    }
+    .xterm .xterm-viewport {
+      background-color: #000 !important;
+    }
+    #tabbar {
+      position: fixed;
+      top: 5px;
+      right: 10px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .tab {
+      color: rgba(255, 255, 255, 0.5);
+      background: rgba(255, 255, 255, 0.10);
+      font: 14px/1 monospace;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .tab.active {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.25);
+    }
+    .tab .x {
+      display: inline-block;
+      margin-left: 9px;
+      padding: 3px 4px;
+      margin-right: -4px;
+      opacity: 0.6;
+      border-radius: 3px;
+    }
+    .tab .x:hover {
+      opacity: 1;
+      background: rgba(255, 255, 255, 0.18);
+    }
+    #addtab {
+      color: rgba(255, 255, 255, 0.5);
+      background: rgba(255, 255, 255, 0.10);
+      font: 17px/1 monospace;
+      padding: 6px 13px;
+      border-radius: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    #addtab:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.22);
+    }
+  </style>
+</head>
+<body>
+  <div id="tabbar"></div>
+  <script src="static/xterm.js"></script>
+  <script src="static/xterm-addon-fit.js"></script>
+  <script>
+    (function () {
+      var tabbar = document.getElementById("tabbar");
+      var sessions = [];
+      var activeIdx = -1;
+      var seq = 0;
+
+      var wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+      var base = location.pathname.replace(/[^/]*$/, "");
+      var wsUrl = wsProto + "//" + location.host + base + "ws";
+
+      function Session() {
+        this.idx = seq++;
+        this.closed = false;
+
+        this.el = document.createElement("div");
+        this.el.className = "term";
+        document.body.insertBefore(this.el, tabbar);
+
+        this.term = new Terminal({
+          cursorBlink: true,
+          fontSize: 15,
+          fontFamily: '"SF Mono", Menlo, Monaco, Consolas, "Courier New", monospace',
+          theme: { background: "#000000", foreground: "#e6e6e6", cursor: "#e6e6e6" },
+          scrollback: 5000
+        });
+        this.fit = new FitAddon.FitAddon();
+        this.term.loadAddon(this.fit);
+        this.term.open(this.el);
+
+        var self = this;
+        this.term.onData(function (data) {
+          if (self.ws && self.ws.readyState === WebSocket.OPEN) {
+            self.ws.send(JSON.stringify({ type: "input", data: data }));
+          }
+        });
+        this.el.addEventListener("click", function () {
+          if (!self.ws || self.ws.readyState >= WebSocket.CLOSING) {
+            self.connect();
+          }
+        });
+
+        // 标签
+        this.tabEl = document.createElement("div");
+        this.tabEl.className = "tab";
+        this.label = document.createTextNode(String(this.idx + 1));
+        this.tabEl.appendChild(this.label);
+        var x = document.createElement("span");
+        x.className = "x";
+        x.textContent = "×";
+        x.addEventListener("click", function (e) {
+          e.stopPropagation();
+          self.close();
+        });
+        this.tabEl.appendChild(x);
+        this.tabEl.addEventListener("click", function () {
+          activate(sessions.indexOf(self));
+        });
+        tabbar.insertBefore(this.tabEl, document.getElementById("addtab"));
+
+        this.connect();
+      }
+
+      Session.prototype.connect = function () {
+        var self = this;
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+        this.term.reset();
+        this.ws = new WebSocket(wsUrl);
+        this.ws.binaryType = "arraybuffer";
+
+        this.ws.onopen = function () {
+          self.sendResize();
+        };
+
+        this.ws.onmessage = function (evt) {
+          if (evt.data instanceof ArrayBuffer) {
+            self.term.write(new TextDecoder("utf-8").decode(evt.data));
+            return;
+          }
+          try {
+            var msg = JSON.parse(evt.data);
+            if (msg.type === "error") {
+              self.term.writeln("\x1b[31m" + msg.data + "\x1b[0m");
+              self.term.writeln("\x1b[33m点击此处重新连接... \x1b[0m");
+            } else if (msg.type === "notice") {
+              self.term.writeln("\x1b[36m" + msg.data + "\x1b[0m");
+            }
+          } catch (e) { /* ignore */ }
+        };
+
+        this.ws.onclose = function () {
+          self.term.writeln("\r\n\x1b[33m连接已断开，点击此处重新连接...\x1b[0m");
+        };
+      };
+
+      Session.prototype.sendResize = function () {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: "resize", cols: this.term.cols, rows: this.term.rows }));
+        }
+      };
+
+      Session.prototype.show = function () {
+        this.el.classList.add("active");
+        this.tabEl.classList.add("active");
+        var self = this;
+        this.fit.fit();
+        setTimeout(function () { self.fit.fit(); self.sendResize(); self.term.focus(); }, 0);
+      };
+
+      Session.prototype.hide = function () {
+        this.el.classList.remove("active");
+        this.tabEl.classList.remove("active");
+      };
+
+      Session.prototype.close = function () {
+        if (this.closed) return;
+        this.closed = true;
+        try { if (this.ws) this.ws.close(); } catch (e) {}
+        try { this.term.dispose(); } catch (e) {}
+        var i = sessions.indexOf(this);
+        if (i >= 0) sessions.splice(i, 1);
+        this.el.remove();
+        this.tabEl.remove();
+        if (sessions.length === 0) {
+          window.close();
+          // window.close 可能被拒绝（非脚本打开的窗口），兜底保留一个会话
+          if (sessions.length === 0) new Session();
+          activate(sessions.length - 1);
+        } else {
+          activate(Math.min(i, sessions.length - 1));
+        }
+        refreshBar();
+      };
+
+      function activate(i) {
+        if (i < 0 || i >= sessions.length || i === activeIdx) return;
+        for (var k = 0; k < sessions.length; k++) sessions[k].hide();
+        activeIdx = i;
+        sessions[i].show();
+      }
+
+      // 标签栏显隐：多个会话时显示标签与×；只剩一个时隐藏标签（保留 + 以便再开）
+      function refreshBar() {
+        var multi = sessions.length > 1;
+        for (var k = 0; k < sessions.length; k++) {
+          sessions[k].tabEl.style.display = multi ? "" : "none";
+        }
+      }
+
+      // + 新建标签（独立 SSH 会话）
+      var addBtn = document.createElement("div");
+      addBtn.id = "addtab";
+      addBtn.textContent = "+";
+      addBtn.title = "新建会话标签";
+      addBtn.addEventListener("click", function () {
+        sessions.push(new Session());
+        activate(sessions.length - 1);
+        refreshBar();
+      });
+      tabbar.appendChild(addBtn);
+
+      window.addEventListener("resize", function () {
+        if (activeIdx >= 0 && sessions[activeIdx]) {
+          sessions[activeIdx].fit.fit();
+          sessions[activeIdx].sendResize();
+        }
+      });
+
+      // 首个会话
+      sessions.push(new Session());
+      activate(0);
+      refreshBar();
+    })();
+  </script>
+</body>
+</html>

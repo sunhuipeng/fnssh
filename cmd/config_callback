@@ -1,0 +1,15 @@
+#!/bin/bash
+# 配置变更后执行：把「运行设置」里的新值写回 config.json（服务每次连接时读取，立即生效）
+# 注意：自定义 cmd/ 脚本不会被 fnOS 部署，逻辑放在 app/write_config.py。
+
+log() { echo "[$(date '+%F %T')] config_callback: $*" >> "$TRIM_PKGVAR/install.log" 2>/dev/null; }
+
+PY="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+
+if [ -f "$TRIM_APPDEST/write_config.py" ]; then
+  "$PY" "$TRIM_APPDEST/write_config.py" || log "write_config.py rc=$?"
+else
+  log "ERROR: $TRIM_APPDEST/write_config.py missing"
+fi
+
+exit 0

@@ -1,0 +1,121 @@
+#!/bin/bash
+# 运行控制：start / stop / status（零第三方依赖，仅系统 python3 + ssh）
+
+PID_FILE="$TRIM_PKGVAR/server.pid"
+LOG_FILE="$TRIM_PKGVAR/server.log"
+PORT="${TRIM_SERVICE_PORT:-8899}"
+SOCK_FILE="$TRIM_APPDEST/fnssh.sock"
+
+log() { echo "[$(date '+%F %T')] main($1): $2" >> "$TRIM_PKGVAR/install.log" 2>/dev/null; }
+
+is_running() {
+  [ -f "$PID_FILE" ] || return 1
+  local pid
+  pid="$(cat "$PID_FILE" 2>/dev/null)"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+find_bin() {
+  command -v "$1" 2>/dev/null || { [ -x "/usr/bin/$1" ] && echo "/usr/bin/$1"; }
+}
+
+port_open() {
+  (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null && exec 3<&- 3>&- && return 0
+  return 1
+}
+
+# 统一网关通道就绪：socket 文件存在且 HTTP 探测返回 200
+sock_ready() {
+  [ -S "$SOCK_FILE" ] || return 1
+  local py
+  py="$(find_bin python3)"
+  [ -n "$py" ] || return 0
+  "$py" - "$SOCK_FILE" <<'PYEOF' 2>/dev/null
+import socket, sys
+try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(3)
+    s.connect(sys.argv[1])
+    s.sendall(b"GET /app/fnssh/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    data = s.recv(200)
+    sys.exit(0 if (b"200" in data or b"101" in data) else 1)
+except Exception:
+    sys.exit(1)
+PYEOF
+}
+
+fail() {
+  log "start" "FAILED: $1"
+  {
+    echo "SSH 启动失败：$1"
+    echo "--- 最近日志 ($LOG_FILE) ---"
+    tail -n 15 "$LOG_FILE" 2>/dev/null
+  } > "$TRIM_TEMP_LOGFILE" 2>/dev/null
+  exit 1
+}
+
+case "$1" in
+  start)
+    if is_running; then
+      exit 0
+    fi
+    mkdir -p "$TRIM_PKGVAR" 2>/dev/null
+
+    PY="$(find_bin python3)"
+    if [ -z "$PY" ]; then
+      fail "系统中未找到 python3"
+    fi
+    if [ -z "$(find_bin ssh)" ]; then
+      fail "系统中未找到 ssh 命令（openssh-client）"
+    fi
+    log "start" "python=$PY port=$PORT sock=$SOCK_FILE appdest=$TRIM_APPDEST"
+
+    export PYTHONUNBUFFERED=1
+    export TRIM_APPDEST TRIM_PKGETC TRIM_PKGVAR TRIM_SERVICE_PORT
+
+    nohup "$PY" "$TRIM_APPDEST/server.py" >> "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      # 网关通道（unix socket）或直连通道（tcp）任一就绪即成功
+      if sock_ready || port_open; then
+        log "start" "OK pid=$(cat "$PID_FILE")"
+        exit 0
+      fi
+      if ! is_running; then
+        fail "进程已退出，详见日志"
+      fi
+      sleep 0.5
+    done
+
+    fail "服务在 10 秒内未就绪（网关 socket 与端口 $PORT 均未监听，可能端口被占用）"
+    ;;
+
+  stop)
+    if is_running; then
+      kill "$(cat "$PID_FILE")" 2>/dev/null
+      sleep 1
+      kill -9 "$(cat "$PID_FILE")" 2>/dev/null
+    fi
+    rm -f "$PID_FILE" "$SOCK_FILE" 2>/dev/null
+    exit 0
+    ;;
+
+  status)
+    if is_running; then
+      exit 0
+    fi
+    exit 3
+    ;;
+
+  restart)
+    "$0" stop >/dev/null 2>&1
+    "$0" start
+    ;;
+
+  *)
+    echo "Usage: $0 {start|stop|status|restart}" > "$TRIM_TEMP_LOGFILE"
+    exit 1
+    ;;
+esac

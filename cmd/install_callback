@@ -1,0 +1,41 @@
+#!/bin/bash
+# 安装后执行：写入向导配置
+# 注意：fnOS 只部署 cmd/ 下的标准生命周期脚本，自定义脚本不会落地，
+#      因此真正的写配置逻辑放在 app/write_config.py（app/ 会完整部署）。
+
+log() { echo "[$(date '+%F %T')] install_callback: $*" >> "$TRIM_PKGVAR/install.log" 2>/dev/null; }
+
+PY="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+
+if [ -f "$TRIM_APPDEST/write_config.py" ]; then
+  "$PY" "$TRIM_APPDEST/write_config.py" || log "write_config.py rc=$?"
+else
+  log "WARN: $TRIM_APPDEST/write_config.py missing, inline fallback"
+  "$PY" - <<'PYEOF' || log "inline writer rc=$?"
+import json, os
+mapping = {"wizard_ssh_host": "host", "wizard_ssh_port": "port",
+           "wizard_ssh_user": "user", "wizard_ssh_password": "password",
+           "wizard_ssh_command": "command"}
+conf = {}
+for d in filter(None, [os.environ.get("TRIM_PKGETC"), os.environ.get("TRIM_PKGVAR")]):
+    path = os.path.join(d, "config.json")
+    os.makedirs(d, exist_ok=True)
+    conf = {}
+    if os.path.exists(path):
+        try:
+            conf = json.load(open(path, encoding="utf-8"))
+        except Exception:
+            conf = {}
+    for e, c in mapping.items():
+        v = os.environ.get(e, "")
+        if v != "":
+            conf[c] = v
+    for k, v in {"host": "127.0.0.1", "port": "22", "user": "admin",
+                 "password": "", "command": ""}.items():
+        conf.setdefault(k, v)
+    json.dump(conf, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    print("wrote", path)
+PYEOF
+fi
+
+exit 0
